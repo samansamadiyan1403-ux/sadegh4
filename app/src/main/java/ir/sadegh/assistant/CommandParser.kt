@@ -7,21 +7,34 @@ sealed class Command {
 
 object CommandParser {
 
-    // الگوهای فارسی برای فرمان تماس
-    private val callPatterns = listOf(
-        Regex("""^(?:صادق\s+)?(?:لطفا\s+)?(?:به\s+)?(.+?)\s+زنگ\s+بزن$"""),
-        Regex("""^(?:صادق\s+)?(?:لطفا\s+)?با\s+(.+?)\s+تماس\s+بگیر$"""),
-        Regex("""^(?:صادق\s+)?(?:لطفا\s+)?(?:زنگ\s+بزن\s+به|تماس\s+بگیر\s+با)\s+(.+)$"""),
-        Regex("""^call\s+(.+)$""", RegexOption.IGNORE_CASE),
+    // کلماتی که نشان می‌دهند کاربر تماس می‌خواهد
+    private val callWords = setOf("زنگ", "تماس", "کال", "call", "dial", "phone")
+
+    // کلمات اضافه که جزو اسم مخاطب نیستند
+    private val fillerWords = setOf(
+        "صادق", "لطفا", "لطفن", "بزن", "بزنید", "بزنین", "بزنی", "بزنم", "بگیر", "بگیرید", "بگیرین", "بگیری", "بگیرم",
+        "به", "با", "برای", "برام", "برایم", "من", "رو", "را", "کن", "کنید",
+        "میشه", "می", "شه", "میتونی", "میتوانی", "تونی", "توانی", "یه", "یک", "بار",
+        "to", "please", "a"
     )
 
+    private fun normalize(raw: String): String = raw
+        .replace('ي', 'ی')
+        .replace('ك', 'ک')
+        .replace(Regex("[\\u064B-\\u065F\\u0640]"), "")   // اعراب و کشیده
+        .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")        // علامت‌ها و نیم‌فاصله
+        .lowercase()
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
     fun parse(raw: String): Command {
-        val text = raw.trim()
-            .replace('ي', 'ی')   // یای عربی -> فارسی
-            .replace('ك', 'ک')   // کاف عربی -> فارسی
-        for (p in callPatterns) {
-            p.find(text)?.let { return Command.Call(it.groupValues[1].trim()) }
-        }
-        return Command.Unknown
+        val tokens = normalize(raw).split(" ").filter { it.isNotBlank() }
+        if (tokens.none { it in callWords }) return Command.Unknown
+
+        val name = tokens
+            .filter { it !in callWords && it !in fillerWords }
+            .joinToString(" ")
+
+        return if (name.isNotBlank()) Command.Call(name) else Command.Unknown
     }
 }
