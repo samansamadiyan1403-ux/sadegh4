@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -19,9 +20,12 @@ import java.util.Locale
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var status: TextView
-    private lateinit var recognizer: SpeechRecognizer
+    private lateinit var wakeBtn: Button
     private lateinit var tts: TextToSpeech
-    private var pendingNumber: String? = null
+    private var recognizer: SpeechRecognizer? = null
+
+    // بعد از دادن مجوز چه کاری انجام شود: 1 = گوش دادن با دکمه، 2 = روشن کردن حالت «صادق»
+    private var pendingAction = 0
 
     private val perms = arrayOf(
         Manifest.permission.RECORD_AUDIO,
@@ -33,19 +37,41 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
+        wakeBtn = findViewById(R.id.wakeBtn)
         tts = TextToSpeech(this, this)
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.text = "تشخیص گفتار روی این گوشی در دسترس نیست"
-            return
-        }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        recognizer.setRecognitionListener(listener)
 
         findViewById<Button>(R.id.listenBtn).setOnClickListener {
             if (hasAllPermissions()) startListening()
-            else ActivityCompat.requestPermissions(this, perms, 1)
+            else {
+                pendingAction = 1
+                ActivityCompat.requestPermissions(this, perms, 1)
+            }
         }
+
+        wakeBtn.setOnClickListener {
+            if (hasAllPermissions()) toggleWake()
+            else {
+                pendingAction = 2
+                ActivityCompat.requestPermissions(this, perms, 1)
+            }
+        }
+
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            val r = SpeechRecognizer.createSpeechRecognizer(this)
+            r.setRecognitionListener(listener)
+            recognizer = r
+        } else {
+            status.text = "تشخیص گفتار روی این گوشی در دسترس نیست"
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        setWakeButtonText(WakeService.running)
+    }
+
+    private fun setWakeButtonText(on: Boolean) {
+        wakeBtn.text = if (on) "🔴 خاموش کردن صدا زدن «صادق»" else "🟢 فعال‌سازی صدا زدن «صادق»"
     }
 
     private fun hasAllPermissions() = perms.all {
@@ -54,8 +80,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
         super.onRequestPermissionsResult(code, p, r)
-        if (hasAllPermissions()) startListening()
-        else status.text = "برای کار کردن، همهٔ مجوزها لازم است"
+        if (code != 1) return
+        if (hasAllPermissions()) {
+            when (pendingAction) {
+                1 -> startListening()
+                2 -> toggleWake()
+            }
+        } else {
+            status.text = "برای کار کردن، همهٔ مجوزها لازم است"
+        }
+        pendingAction = 0
+    }
+
+    private fun toggleWake() {
+        if (WakeService.running) {
+            stopService(Intent(this, WakeService::class.java))
+            setWakeButtonText(false)
+            status.text = "حالت «صادق» خاموش شد"
+        } else {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+            }
+            ContextCompat.startForegroundService(this, Intent(this, WakeService::class.java))
+            setWakeButtonText(true)
+            status.text = "فعال شد. اولین بار چند ثانیه آماده‌سازی دارد. بعدش بگو «صادق»"
+        }
     }
 
     override fun onInit(s: Int) {
@@ -68,20 +120,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startListening() {
+        if (WakeService.running) {
+            status.text = "حالت «صادق» روشن است؛ اول خاموشش کن یا فقط بگو «صادق»"
+            return
+        }
+        val r = recognizer
+        if (r == null) {
+            status.text = "تشخیص گفتار در دسترس نیست"
+            return
+        }
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
         status.text = "گوش می‌دم..."
-        recognizer.startListening(i)
+        r.startListening(i)
     }
 
     private val listener = object : RecognitionListener {
         override fun onResults(results: Bundle) {
             val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull() ?: return say("متوجه نشدم")
-            handle(text)
+                ?.firstOrNull()
+            if (text == null) say("متوجه نشدم") else handle(text)
         }
         override fun onPartialResults(partial: Bundle) {
             partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
@@ -117,7 +178,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        if (::recognizer.isInitialized) recognizer.destroy()
+        recognizer?.destroy()
         tts.shutdown()
         super.onDestroy()
     }

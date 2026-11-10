@@ -20,4 +20,11 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="32dp"
         android:text="🎤 صادق" />
+
+    <Button
+        android:id="@+id/wakeBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="🟢 فعال‌سازی صدا زدن «صادق»" />
 </LinearLayout>
